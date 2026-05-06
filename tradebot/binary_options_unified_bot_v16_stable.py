@@ -244,6 +244,11 @@ def close_due_paper_trades(paper_path: Path):
     if open_trades.empty:
         return []
     
+    # Приводим ключевые колонки к строковому типу перед модификацией
+    for col in ["closed_at_utc", "external_exit_price", "result", "profit"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).replace("nan", "").replace("NaN", "")
+    
     now_ts = pd.Timestamp.now(tz="UTC")
     changed = False
     closed_rows = []
@@ -277,9 +282,6 @@ def close_due_paper_trades(paper_path: Path):
             print(f"[paper close error] {t.get('trade_id', idx)}: {e}")
             
     if changed:
-        # Перед записью приводим типы обратно к строкам для CSV
-        for col in ["closed_at_utc", "external_exit_price", "result", "profit"]:
-            if col in df.columns: df[col] = df[col].astype(str).replace("nan", "")
         df.to_csv(paper_path, index=False, encoding="utf-8-sig")
     return closed_rows
 
