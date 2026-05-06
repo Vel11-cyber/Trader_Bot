@@ -1834,6 +1834,11 @@ def close_due_paper_trades(paper_path: Path):
     if df.empty or "status" not in df.columns:
         return []
 
+    # Приводим ключевые колонки к строковому типу перед модификацией
+    for col in ["closed_at_utc", "external_exit_price", "result", "profit"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).replace("nan", "").replace("NaN", "")
+
     changed_rows = []
     now_ts = pd.Timestamp.now(tz="UTC")
 
@@ -1862,9 +1867,9 @@ def close_due_paper_trades(paper_path: Path):
 
             df.loc[idx, "status"] = "CLOSED"
             df.loc[idx, "closed_at_utc"] = now_utc().isoformat()
-            df.loc[idx, "external_exit_price"] = exit_price
+            df.loc[idx, "external_exit_price"] = str(exit_price)
             df.loc[idx, "result"] = result
-            df.loc[idx, "profit"] = profit
+            df.loc[idx, "profit"] = str(profit)
 
             changed_rows.append(df.loc[idx].to_dict())
 

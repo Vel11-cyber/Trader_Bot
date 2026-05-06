@@ -166,7 +166,7 @@ STRATEGIES = [
     {"platform":"Deriv","asset":"EUR/GBP","category":"Forex","yf":"EURGBP=X","strategy":"EUR/GBP FALL","display_direction":"FALL","direction_side":"DOWN","payout_pct":81.9,"rsi_level":70,"bb_std":1.3,"adx_limit":20,"ema_slope_limit":0.1,"priority":"B"},
 ]
 
-def signal_matches( pd.DataFrame, pos: int, strategy: dict) -> bool:
+def signal_matches(data: pd.DataFrame, pos: int, strategy: dict) -> bool:
     row = data.iloc[pos]
     needed = ["rsi", "bb_upper", "bb_lower", "adx", "ema100_slope_pct"]
     if any(pd.isna(row[x]) for x in needed):
@@ -244,6 +244,11 @@ def close_due_paper_trades(paper_path: Path):
     if open_trades.empty:
         return []
     
+    # Приводим ключевые колонки к строковому типу перед модификацией
+    for col in ["closed_at_utc", "external_exit_price", "result", "profit"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).replace("nan", "").replace("NaN", "")
+    
     now_ts = pd.Timestamp.now(tz="UTC")
     changed = False
     closed_rows = []
@@ -260,10 +265,33 @@ def close_due_paper_trades(paper_path: Path):
             candidates = data[data.index >= exit_candle]
             if candidates.empty: continue
             exit_price = float(candidates.iloc[0]["Close"])
-            entry_price = float(t["external_entry_price"])
+            
+            # Безопасное преобразование entry_price
+            entry_price_raw = str(t["external_entry_price"]).strip()
+            if not entry_price_raw or entry_price_raw.lower() in ("nan", "none", ""):
+                print(f"[paper close skip] {t.get('trade_id', idx)}: empty entry price")
+                continue
+            try:
+                entry_price = float(entry_price_raw)
+            except ValueError:
+                print(f"[paper close skip] {t.get('trade_id', idx)}: invalid entry price '{entry_price_raw}'")
+                continue
+            
             direction = str(t["direction_side"]).strip()
+            
+            # Безопасное преобразование payout_pct и stake
+            try:
+                payout_pct = float(str(t["payout_pct"]).strip())
+            except ValueError:
+                payout_pct = 75.0  # default fallback
+            
+            try:
+                stake = float(str(t["stake"]).strip())
+            except ValueError:
+                stake = BET_SIZE  # default fallback
+            
             res = calc_result(direction, entry_price, exit_price)
-            prof = calc_profit(res, float(t["payout_pct"]), float(t["stake"]))
+            prof = calc_profit(res, payout_pct, stake)
             
             # Безопасная запись
             df.at[idx, "status"] = "CLOSED"
@@ -277,9 +305,6 @@ def close_due_paper_trades(paper_path: Path):
             print(f"[paper close error] {t.get('trade_id', idx)}: {e}")
             
     if changed:
-        # Перед записью приводим типы обратно к строкам для CSV
-        for col in ["closed_at_utc", "external_exit_price", "result", "profit"]:
-            if col in df.columns: df[col] = df[col].astype(str).replace("nan", "")
         df.to_csv(paper_path, index=False, encoding="utf-8-sig")
     return closed_rows
 
