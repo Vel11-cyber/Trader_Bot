@@ -265,10 +265,33 @@ def close_due_paper_trades(paper_path: Path):
             candidates = data[data.index >= exit_candle]
             if candidates.empty: continue
             exit_price = float(candidates.iloc[0]["Close"])
-            entry_price = float(t["external_entry_price"])
+            
+            # Безопасное преобразование entry_price
+            entry_price_raw = str(t["external_entry_price"]).strip()
+            if not entry_price_raw or entry_price_raw.lower() in ("nan", "none", ""):
+                print(f"[paper close skip] {t.get('trade_id', idx)}: empty entry price")
+                continue
+            try:
+                entry_price = float(entry_price_raw)
+            except ValueError:
+                print(f"[paper close skip] {t.get('trade_id', idx)}: invalid entry price '{entry_price_raw}'")
+                continue
+            
             direction = str(t["direction_side"]).strip()
+            
+            # Безопасное преобразование payout_pct и stake
+            try:
+                payout_pct = float(str(t["payout_pct"]).strip())
+            except ValueError:
+                payout_pct = 75.0  # default fallback
+            
+            try:
+                stake = float(str(t["stake"]).strip())
+            except ValueError:
+                stake = BET_SIZE  # default fallback
+            
             res = calc_result(direction, entry_price, exit_price)
-            prof = calc_profit(res, float(t["payout_pct"]), float(t["stake"]))
+            prof = calc_profit(res, payout_pct, stake)
             
             # Безопасная запись
             df.at[idx, "status"] = "CLOSED"
