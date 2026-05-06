@@ -177,8 +177,8 @@ def signal_matches(data: pd.DataFrame, pos: int, strategy: dict) -> bool:
         return row["rsi"] < float(strategy["rsi_level"]) and price < float(row["bb_lower"]) and sideways
     return row["rsi"] > float(strategy["rsi_level"]) and price > float(row["bb_upper"]) and sideways
 
-def near_signal_info( pd.DataFrame, pos: int, strategy: dict) -> dict:
-    row = data.iloc[pos]
+def near_signal_info(df: pd.DataFrame, pos: int, strategy: dict) -> dict:
+    row = df.iloc[pos]
     needed = ["rsi", "bb_upper", "bb_lower", "adx", "ema100_slope_pct"]
     if any(pd.isna(row[x]) for x in needed):
         return {"is_near_signal": False, "near_reason": "not_enough_data", "near_score": 0}
@@ -322,6 +322,14 @@ def send_telegram(text: str) -> bool:
         print(f"[telegram error] {e}")
         return False
 
+def send_telegram_startup():
+    msg = "🟢 Bot Started\nBinary Options Watcher v16 Stable launched.\nMonitoring active."
+    send_telegram(msg)
+
+def send_telegram_shutdown():
+    msg = "🔴 Bot Stopped\nBinary Options Watcher v16 Stable stopped."
+    send_telegram(msg)
+
 def evaluate_latest(strategy: dict, max_age: float) -> dict:
     data = add_indicators(download_data(strategy["yf"]), strategy["bb_std"])
     if len(data) < 105: raise ValueError(f"Мало свечей: {len(data)}")
@@ -378,54 +386,64 @@ def run_live(args):
     closed_ids = load_json_set(out / CLOSED_IDS_JSON)
     
     print(f"🚀 Unified Bot v16 Stable | Strategies: {len(STRATEGIES)} | Output: {out.resolve()}")
-    while True:
-        rows = []
-        for s in STRATEGIES:
-            try: rows.append(evaluate_latest(s, args.max_signal_age_minutes))
-            except Exception as e: rows.append({"checked_at_utc": now_utc().isoformat(), "platform": s["platform"], "asset": s["asset"], "strategy": s["strategy"], "is_actionable": False, "reason": f"error: {e}", "is_near_signal": False, "near_score": 0, "rsi": np.nan, "adx": np.nan})
+    
+    # Отправка уведомления о запуске
+    if args.telegram:
+        send_telegram_startup()
+    
+    try:
+        while True:
+            rows = []
+            for s in STRATEGIES:
+                try: rows.append(evaluate_latest(s, args.max_signal_age_minutes))
+                except Exception as e: rows.append({"checked_at_utc": now_utc().isoformat(), "platform": s["platform"], "asset": s["asset"], "strategy": s["strategy"], "is_actionable": False, "reason": f"error: {e}", "is_near_signal": False, "near_score": 0, "rsi": np.nan, "adx": np.nan})
             
-        actionable = [r for r in rows if r.get("is_actionable")]
-        near_rows = [r for r in rows if r.get("is_near_signal") and not r.get("is_actionable")]
-        
-        # Сохраняем логи
-        safe_append_csv(out / "unified_watcher_latest.csv", rows)
-        safe_append_csv(out / "unified_near_signals.csv", near_rows)
-        
-        # Открываем сделки
-        suppressed = 0
-        for r in actionable:
-            sid = signal_id(r["platform"], r["strategy"], r["signal_candle_utc"], r["display_direction"])
-            cool, reason = is_on_cooldown(r, paper_path, args.cooldown_minutes)
-            if cool:
-                suppressed += 1
-                continue
-            trade = open_paper_trade(r, paper_path)
-            if trade and sid not in sent_ids:
-                msg = f"🚨 Signal: {r['platform']} {r['asset']} {r['display_direction']}\nStrategy: {r['strategy']}\nRSI: {r['rsi']:.2f} | ADX: {r['adx']:.2f}"
-                print(msg)
-                if args.telegram: send_telegram(msg)
-                sent_ids.add(sid)
-                
-        # Закрываем сделки
-        closed = close_due_paper_trades(paper_path)
-        for c in closed:
-            tid = str(c.get("trade_id", ""))
-            if tid and tid not in closed_ids:
-                msg = f"📊 Paper Closed: {c['platform']} {c['asset']} {c['display_direction']} | Result: {c['result']} | Profit: {c['profit']}"
-                print(msg)
-                if args.telegram: send_telegram(msg)
-                closed_ids.add(tid)
-                
-        save_json_set(out / SENT_IDS_JSON, sent_ids)
-        save_json_set(out / CLOSED_IDS_JSON, closed_ids)
-        
-        # Heartbeat & Console
-        heartbeat = {"last_check": now_utc().isoformat(), "checked": len(rows), "signals": len(actionable), "near": len(near_rows), "suppressed": suppressed, "paper_closed": len(closed)}
-        (out / HEARTBEAT_JSON).write_text(json.dumps(heartbeat, indent=2), encoding="utf-8")
-        print(f"[{now_utc().strftime('%H:%M:%S UTC')}] checked={len(rows)} signals={len(actionable)} near={len(near_rows)} sup={suppressed} closed={len(closed)}")
-        
-        if args.once: break
-        time.sleep(args.sleep_seconds)
+            actionable = [r for r in rows if r.get("is_actionable")]
+            near_rows = [r for r in rows if r.get("is_near_signal") and not r.get("is_actionable")]
+            
+            # Сохраняем логи
+            safe_append_csv(out / "unified_watcher_latest.csv", rows)
+            safe_append_csv(out / "unified_near_signals.csv", near_rows)
+            
+            # Открываем сделки
+            suppressed = 0
+            for r in actionable:
+                sid = signal_id(r["platform"], r["strategy"], r["signal_candle_utc"], r["display_direction"])
+                cool, reason = is_on_cooldown(r, paper_path, args.cooldown_minutes)
+                if cool:
+                    suppressed += 1
+                    continue
+                trade = open_paper_trade(r, paper_path)
+                if trade and sid not in sent_ids:
+                    msg = f"🚨 Signal: {r['platform']} {r['asset']} {r['display_direction']}\nStrategy: {r['strategy']}\nRSI: {r['rsi']:.2f} | ADX: {r['adx']:.2f}"
+                    print(msg)
+                    if args.telegram: send_telegram(msg)
+                    sent_ids.add(sid)
+                    
+            # Закрываем сделки
+            closed = close_due_paper_trades(paper_path)
+            for c in closed:
+                tid = str(c.get("trade_id", ""))
+                if tid and tid not in closed_ids:
+                    msg = f"📊 Paper Closed: {c['platform']} {c['asset']} {c['display_direction']} | Result: {c['result']} | Profit: {c['profit']}"
+                    print(msg)
+                    if args.telegram: send_telegram(msg)
+                    closed_ids.add(tid)
+                    
+            save_json_set(out / SENT_IDS_JSON, sent_ids)
+            save_json_set(out / CLOSED_IDS_JSON, closed_ids)
+            
+            # Heartbeat & Console
+            heartbeat = {"last_check": now_utc().isoformat(), "checked": len(rows), "signals": len(actionable), "near": len(near_rows), "suppressed": suppressed, "paper_closed": len(closed)}
+            (out / HEARTBEAT_JSON).write_text(json.dumps(heartbeat, indent=2), encoding="utf-8")
+            print(f"[{now_utc().strftime('%H:%M:%S UTC')}] checked={len(rows)} signals={len(actionable)} near={len(near_rows)} sup={suppressed} closed={len(closed)}")
+            
+            if args.once: break
+            time.sleep(args.sleep_seconds)
+    finally:
+        # Отправка уведомления о остановке
+        if args.telegram:
+            send_telegram_shutdown()
 
 def main():
     parser = argparse.ArgumentParser(description="Binary Options Unified Bot v16")
@@ -441,5 +459,7 @@ def main():
 
 if __name__ == "__main__":
     try: main()
-    except KeyboardInterrupt: print("\n⏹ Stopped by user.")
-    except Exception as e: print(f"\n💥 CRASH: {e}\n")
+    except KeyboardInterrupt: 
+        print("\n⏹ Stopped by user.")
+    except Exception as e: 
+        print(f"\n💥 CRASH: {e}\n")
