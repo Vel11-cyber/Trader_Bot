@@ -166,7 +166,7 @@ STRATEGIES = [
     {"platform":"Deriv","asset":"EUR/GBP","category":"Forex","yf":"EURGBP=X","strategy":"EUR/GBP FALL","display_direction":"FALL","direction_side":"DOWN","payout_pct":81.9,"rsi_level":70,"bb_std":1.3,"adx_limit":20,"ema_slope_limit":0.1,"priority":"B"},
 ]
 
-def signal_matches( pd.DataFrame, pos: int, strategy: dict) -> bool:
+def signal_matches(data: pd.DataFrame, pos: int, strategy: dict) -> bool:
     row = data.iloc[pos]
     needed = ["rsi", "bb_upper", "bb_lower", "adx", "ema100_slope_pct"]
     if any(pd.isna(row[x]) for x in needed):
